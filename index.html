@@ -6,14 +6,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body, #map { width:100%; height:100%; margin:0; padding:0; }
+
     /* Оверлей-подсказка */
     #hint {
-      position: fixed; inset: 0; background: rgba(0,0,0,.6);
-      display: none; align-items: center; justify-content: center; z-index: 99999;
+      position: fixed; inset: 0; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(0,0,0,.6); z-index: 99999;
     }
     #hint .box {
-      max-width: 92%; background: #111; color:#fff; border-radius:14px;
-      padding:16px; font: 14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      max-width: 92%; background: #111; color:#fff;
+      border-radius:14px; padding:16px;
+      font: 14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;
       text-align: left; box-shadow: 0 10px 30px rgba(0,0,0,.35);
     }
     #hint .box h3 { margin:0 0 8px; font-size:16px }
@@ -21,33 +24,48 @@
       margin-top:12px; width:100%; border:0; border-radius:10px; padding:10px 14px;
       background:#2ea6ff; color:#fff; font-weight:600; font-size:15px; cursor:pointer;
     }
+
+    /* Кнопка «?» (ручной вызов подсказки) */
+    #helpBtn {
+      position:fixed; right:10px; top:10px; z-index:9999;
+      background:#111; color:#fff; border:0; border-radius:10px;
+      padding:8px 11px; font-weight:700; cursor:pointer; opacity:.9;
+    }
   </style>
+
+  <!-- Яндекс.Карты -->
   <script src="https://api-maps.yandex.ru/2.1/?lang=ru_RU&apikey=f08ffb69-0b44-40a1-a11c-4980f7e574b6"></script>
+  <!-- Telegram WebApp -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
   <div id="map"></div>
+
+  <!-- Кнопка «?» -->
+  <button id="helpBtn">?</button>
 
   <!-- Оверлей-подсказка -->
   <div id="hint">
     <div class="box">
       <h3>Как пользоваться картой</h3>
       <div>
-        1) Найди достопримечательность через поиск или ткни в неё на карте.<br/>
-        2) Нажми «Сохранить место» — я подготовлю мини-экскурсию. 🎧
+        1) Найди достопримечательность через поиск или ткни её на карте.<br/>
+        2) Нажми «Сохранить место» — я подготовлю мини-экскурсию 🎧
       </div>
       <button class="btn" id="hintOk">Понятно</button>
     </div>
   </div>
 
   <script>
+    // === Telegram ===
     const tg = window.Telegram.WebApp;
     tg.expand(); tg.ready();
 
-    // Прокси-воркер → GAS
+    // === Прокси (Cloudflare Worker) → GAS ===
     const PROXY_URL = "https://yuvia-proxy.yuviabot.workers.dev/";
     const BOT_SECRET = "8d7f3f2e2a6d44b5aeb4caa7f924c8f9";
 
+    // === user_id из ?id= (или из initData) ===
     function getUserId() {
       const qs = new URLSearchParams(location.search);
       const fromQS = qs.get("id") || qs.get("user_id") || qs.get("contact_id");
@@ -56,23 +74,77 @@
       return "";
     }
 
-    // ===== Подсказка (показываем один раз на устройстве)
-    const hint = document.getElementById('hint');
-    const hintOk = document.getElementById('hintOk');
-    const HINT_KEY = 'yuvia_map_hint_v1';
-    if (!localStorage.getItem(HINT_KEY)) hint.style.display = 'flex';
-    hintOk.onclick = () => { hint.style.display = 'none'; localStorage.setItem(HINT_KEY, '1'); };
+    // ===== Подсказка: правила показа
+    const hint       = document.getElementById('hint');
+    const hintOk     = document.getElementById('hintOk');
+    const helpBtn    = document.getElementById('helpBtn');
 
+    // меняй версию, если изменишь текст подсказки
+    const HINT_VER           = 'v3';
+    const KEY_LAST_SHOWN     = 'yuvia_hint_last_' + HINT_VER; // дата 'YYYY-MM-DD'
+    const KEY_FAILS          = 'yuvia_hint_fails_' + HINT_VER;
+    const FAILS_THRESHOLD    = 2;   // показать снова, если 1–2 раза закрыли без выбора
+    const NO_SELECT_TIMEOUT  = 15000; // 15 сек без выбора — считаем "неудача"
+
+    function todayStr() {
+      const d = new Date();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+    function getInt(k){ return Number(localStorage.getItem(k) || 0); }
+    function setInt(k,v){ localStorage.setItem(k, String(v)); }
+
+    function shouldShowHint() {
+      const last = localStorage.getItem(KEY_LAST_SHOWN);
+      const fails = getInt(KEY_FAILS);
+
+      // 1) Самый первый запуск — показать
+      if (!last) return true;
+
+      // 2) Повторять раз в день при первом открытии
+      if (last !== todayStr()) return true;
+
+      // 3) Если 1–2 неудачных открытия подряд — показать
+      if (fails >= FAILS_THRESHOLD) return true;
+
+      return false;
+    }
+
+    function markHintShownToday() {
+      localStorage.setItem(KEY_LAST_SHOWN, todayStr());
+      // при показе подсказки сбрасываем неудачи
+      localStorage.removeItem(KEY_FAILS);
+    }
+
+    function incFail() { setInt(KEY_FAILS, getInt(KEY_FAILS) + 1); }
+    function resetFails(){ localStorage.removeItem(KEY_FAILS); }
+
+    function openHint(){ hint.style.display = 'flex'; }
+    function closeHint(){ hint.style.display = 'none'; markHintShownToday(); }
+
+    if (shouldShowHint()) openHint();
+    hintOk.onclick = closeHint;
+    helpBtn.onclick = openHint;
+
+    // Если пользователь закрыл WebApp (ушёл со страницы) без выбора — считаем "неудача"
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && !selectedPlace) incFail();
+    });
+
+    // Если в течение 15 сек после открытия ничего не выбрано — тоже "неудача"
+    setTimeout(() => { if (!window.selectedPlace) incFail(); }, NO_SELECT_TIMEOUT);
+
+    // ===== Карта
     let map, selectedPlace = null, mainBound = false;
 
-    // ===== Инициализация карты
     ymaps.ready(() => {
       map = new ymaps.Map("map", { center: [55.751244, 37.618423], zoom: 12, controls: [] });
 
       const searchControl = new ymaps.control.SearchControl({ provider: 'yandex#search' });
       map.controls.add(searchControl);
 
-      // Геолокация пользователя (если разрешит)
+      // Центр по геолокации пользователя (если даст разрешение)
       try {
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
@@ -82,7 +154,7 @@
         }
       } catch(_) {}
 
-      // Клик по карте — просто «Точка на карте»
+      // Клик по карте
       map.events.add("click", (e) => {
         const c = e.get("coords");
         selectedPlace = { name: "Точка на карте", address: "", lat: c[0], lon: c[1] };
@@ -90,7 +162,7 @@
         ensureMainButton();
       });
 
-      // Выбор из поиска — берём имя/описание
+      // Выбор результата поиска
       searchControl.events.add("resultselect", (e) => {
         const i = e.get("index");
         const res = searchControl.getResultsArray();
@@ -123,6 +195,9 @@
       if (!uid) { try { tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); } catch(_) {} return; }
       if (!selectedPlace) { try { tg.showAlert("Сначала выбери точку на карте"); } catch(_) {} return; }
 
+      // успех — сбрасываем счётчик неудач
+      resetFails();
+
       const payload = {
         secret: BOT_SECRET, action: "save_place", user_id: uid,
         title: selectedPlace.name || "", address: selectedPlace.address || "",
@@ -130,7 +205,7 @@
         ts: String(Date.now())
       };
 
-      // GET-пиксель на наш прокси
+      // Надёжная отправка: GET-пиксель на прокси
       const qs = new URLSearchParams(payload);
       (new Image()).src = PROXY_URL + "?" + qs.toString();
 
@@ -139,4 +214,5 @@
   </script>
 </body>
 </html>
+
 
