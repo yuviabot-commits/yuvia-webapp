@@ -24,24 +24,6 @@
       margin-top:12px; width:100%; border:0; border-radius:10px; padding:10px 14px;
       background:#2ea6ff; color:#fff; font-weight:600; font-size:15px; cursor:pointer;
     }
-
-    /* Кнопка «?» — максимально поверх всего + safe-area */
-    #helpBtn{
-      position: fixed;
-      left: calc(env(safe-area-inset-left, 0px) + 10px);
-      top:  calc(env(safe-area-inset-top,  0px) + 10px);
-      z-index: 2147483647;               /* выше любого слоя */
-      background: rgba(17,17,17,.92);
-      color:#fff;
-      border: 2px solid rgba(255,255,255,.2);
-      border-radius: 12px;
-      padding: 8px 12px;
-      font: 600 16px/1 system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      box-shadow: 0 6px 20px rgba(0,0,0,.35);
-      cursor: pointer;
-      opacity: .98;
-      pointer-events: auto;
-    }
   </style>
 
   <!-- Яндекс.Карты -->
@@ -84,11 +66,8 @@
     /* ==== Подсказка: правила показа ==== */
     const hint   = document.getElementById('hint');
     const hintOk = document.getElementById('hintOk');
-    let helpBtn  = document.getElementById('helpBtn');
-    if (!helpBtn) { helpBtn = document.createElement('button'); helpBtn.id='helpBtn'; helpBtn.textContent='?'; document.body.appendChild(helpBtn); }
-    helpBtn.style.display = 'block';
 
-    // версия подсказки (поменяешь текст — измени версию)
+    // версия подсказки (изменишь текст — измени версию)
     const HINT_VER          = 'v3';
     const KEY_LAST_SHOWN    = 'yuvia_hint_last_' + HINT_VER; // YYYY-MM-DD
     const KEY_FAILS         = 'yuvia_hint_fails_' + HINT_VER;
@@ -118,7 +97,6 @@
 
     if (shouldShowHint()) openHint();
     hintOk.onclick = closeHint;
-    helpBtn.onclick = openHint;
 
     // если пользователь ушёл со страницы без выбора — считаем неудачей
     document.addEventListener('visibilitychange', () => {
@@ -133,23 +111,18 @@
     ymaps.ready(() => {
       map = new ymaps.Map("map", { center: [55.751244, 37.618423], zoom: 12, controls: [] });
 
+      // Поиск
       const searchControl = new ymaps.control.SearchControl({ provider: 'yandex#search' });
       map.controls.add(searchControl);
-      // Кнопка-подсказка как control Яндекс.Карт (правый верх)
-const helpControl = new ymaps.control.Button({
-  data: { content: ' ? ' },
-  options: {
-    selectOnClick: false,
-    maxWidth: 40
-  }
-});
 
-// позиционируем справа-сверху (не перекрывает поле поиска слева)
-map.controls.add(helpControl, { position: { top: 10, right: 10 } });
-
-// по клику открываем подсказку (openHint уже есть в коде)
-helpControl.events.add('click', openHint);
-
+      // Кнопка-подсказка как control (правый верх; на iOS чутка ниже шапки)
+      const iosTop = (window.Telegram?.WebApp?.platform === 'ios') ? 52 : 10;
+      const helpControl = new ymaps.control.Button({
+        data: { content: ' ? ' },
+        options: { selectOnClick: false, maxWidth: 40 }
+      });
+      map.controls.add(helpControl, { position: { top: iosTop, right: 10 } });
+      helpControl.events.add('click', openHint);
 
       // Центр по геолокации (если даст разрешение)
       try {
@@ -196,6 +169,15 @@ helpControl.events.add('click', openHint);
       if (!mainBound){ mainBound = true; Telegram.WebApp.MainButton.onClick(onChoose); }
     }
 
+    function getPayload(){
+      return {
+        secret: BOT_SECRET, action: "save_place", user_id: getUserId(),
+        title: selectedPlace?.name || "", address: selectedPlace?.address || "",
+        lat: String(selectedPlace?.lat ?? ""), lon: String(selectedPlace?.lon ?? ""),
+        ts: String(Date.now())
+      };
+    }
+
     function onChoose(){
       const uid = getUserId();
       if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
@@ -204,15 +186,8 @@ helpControl.events.add('click', openHint);
       // успех — сбрасываем счётчик неудач
       resetFails();
 
-      const payload = {
-        secret: BOT_SECRET, action: "save_place", user_id: uid,
-        title: selectedPlace.name || "", address: selectedPlace.address || "",
-        lat: String(selectedPlace.lat || ""), lon: String(selectedPlace.lon || ""),
-        ts: String(Date.now())
-      };
-
-      // надёжный способ: GET-пиксель на прокси
-      const qs = new URLSearchParams(payload);
+      // надёжная отправка: GET-пиксель на прокси
+      const qs = new URLSearchParams(getPayload());
       (new Image()).src = PROXY_URL + "?" + qs.toString();
 
       setTimeout(() => { try { tg.close(); } catch(_) {} }, 300);
@@ -220,6 +195,8 @@ helpControl.events.add('click', openHint);
   </script>
 </body>
 </html>
+
+
 
 
 
