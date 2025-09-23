@@ -7,20 +7,26 @@
   <style>
     html, body, #map { width:100%; height:100%; margin:0; padding:0; }
   </style>
+  <!-- Яндекс.Карты -->
   <script src="https://api-maps.yandex.ru/2.1/?lang=ru_RU&apikey=f08ffb69-0b44-40a1-a11c-4980f7e574b6"></script>
+  <!-- Telegram WebApp -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
   <div id="map"></div>
 
   <script>
+    // === Константы ===
     const tg = window.Telegram.WebApp;
     tg.expand(); tg.ready();
 
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbwPaiaNiLe_zuokBJTjwYma4pm845NWHnbK_OIIW4ZQCwaEedyZczvI_a4F-1p4iVjK/exec";
+    // наш прокси-воркер (вместо прямого script.google.com)
+    const PROXY_URL = "https://yuvia-proxy.yuviabot.workers.dev/";
+
+    // Секрет и действие для GAS
     const BOT_SECRET = "8d7f3f2e2a6d44b5aeb4caa7f924c8f9";
 
-    // user_id из query (?id= / ?user_id= / ?contact_id=) -> fallback на initData
+    // Берём id из query (?id= / ?user_id= / ?contact_id=), иначе — из Telegram initData
     function getUserId() {
       const qs = new URLSearchParams(location.search);
       const fromQS = qs.get("id") || qs.get("user_id") || qs.get("contact_id");
@@ -34,19 +40,30 @@
 
     let map, selectedPlace = null, mainBound = false;
 
+    // === Инициализация карты ===
     ymaps.ready(() => {
-      map = new ymaps.Map("map", { center: [55.751244, 37.618423], zoom: 12, controls: [] });
+      map = new ymaps.Map("map", {
+        center: [55.751244, 37.618423],
+        zoom: 12,
+        controls: []
+      });
+
       const searchControl = new ymaps.control.SearchControl({ provider: 'yandex#search' });
       map.controls.add(searchControl);
 
+      // Клик по карте
       map.events.add("click", (e) => {
         const c = e.get("coords");
-        selectedPlace = { name:"Выбранная точка", address:"", lat:c[0], lon:c[1] };
-        redraw(c, "Выбрано здесь"); showMainButton();
+        selectedPlace = { name: "Выбранная точка", address: "", lat: c[0], lon: c[1] };
+        redraw(c, "Выбрано здесь");
+        ensureMainButton();
       });
 
+      // Выбор из поиска
       searchControl.events.add("resultselect", (e) => {
-        const i = e.get("index"), arr = searchControl.getResultsArray(), obj = arr[i];
+        const i = e.get("index");
+        const res = searchControl.getResultsArray();
+        const obj = res[i];
         if (!obj) return;
         const c = obj.geometry.getCoordinates();
         selectedPlace = {
@@ -54,7 +71,8 @@
           address: obj.properties.get("description") || "",
           lat: c[0], lon: c[1]
         };
-        redraw(c, selectedPlace.name); showMainButton();
+        redraw(c, selectedPlace.name);
+        ensureMainButton();
       });
     });
 
@@ -63,96 +81,47 @@
       map.geoObjects.add(new ymaps.Placemark(coords, { balloonContent: balloon || "" }));
     }
 
-    function showMainButton() {
+    function ensureMainButton() {
       tg.MainButton.setText("Выбрать место");
-      tg.MainButton.show(); tg.MainButton.enable();
-      if (!mainBound) { mainBound = true; Telegram.WebApp.MainButton.onClick(onChoose); }
+      tg.MainButton.show();
+      tg.MainButton.enable();
+      if (!mainBound) {
+        mainBound = true;
+        Telegram.WebApp.MainButton.onClick(onChoose);
+      }
     }
 
     function onChoose() {
       const uid = getUserId();
-      if (!uid) { try { tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); } catch(_) {} return; }
-      if (!selectedPlace) { try { tg.showAlert("Сначала выбери точку на карте"); } catch(_) {} return; }
+      if (!uid) {
+        try { Telegram.WebApp.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); } catch(_) {}
+        return;
+      }
+      if (!selectedPlace) {
+        try { Telegram.WebApp.showAlert("Сначала выбери точку на карте"); } catch(_) {}
+        return;
+      }
 
+      // Формируем payload для GAS
       const payload = {
-        secret: BOT_SECRET,
-        action: "save_place",
+        secret:  BOT_SECRET,
+        action:  "save_place",
         user_id: uid,
-        title: selectedPlace.name || "",
+        title:   selectedPlace.name || "",
         address: selectedPlace.address || "",
-        lat: String(selectedPlace.lat || ""),
-        lon: String(selectedPlace.lon || ""),
-        ts: String(Date.now())
+        lat:     String(selectedPlace.lat || ""),
+        lon:     String(selectedPlace.lon || ""),
+        ts:      String(Date.now())
       };
 
-      // 1) POST: navigator.sendBeacon (без CORS/префлайта, переживает закрытие)
-      try {
-        const blob = new Blob([JSON.stringify(payload)], { type: "text/plain;charset=utf-8" });
-        navigator.sendBeacon(GAS_URL, blob);
-      } catch(_) {}
+      // Самый «пробивной» способ в webview: GET-пиксель на ПРОКСИ
+      const qs = new URLSearchParams(payload);
+      (new Image()).src = PROXY_URL + "?" + qs.toString();
 
-      // 2) POST: XMLHttpRequest (классический канал)
-      try {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", GAS_URL, true);
-        xhr.setRequestHeader("Content-Type", "text/plain;charset=utf-8");
-        xhr.send(JSON.stringify(payload));
-      } catch(_) {}
-
-      // 3) GET: скрытая iframe (гарантированный хит до сервера)
-      try {
-        const qs = new URLSearchParams(payload);
-        const iframe = document.createElement("iframe");
-        iframe.src = GAS_URL + "?" + qs.toString();
-        iframe.style.display = "none";
-        document.body.appendChild(iframe);
-      } catch(_) {}
-
-      // 4) GET: «пиксель» Image (доп. канал)
-      try {
-        const qs2 = new URLSearchParams(payload);
-        const img = new Image();
-        img.src = GAS_URL + "?" + qs2.toString();
-      } catch(_) {}
-
-      // даём сети время и закрываем WebApp
-      setTimeout(() => { try { tg.close(); } catch(_) {} }, 400);
+      // Закрываем окно через ~300 мс, чтобы запрос успел уйти
+      setTimeout(() => { try { Telegram.WebApp.close(); } catch(_) {} }, 300);
     }
   </script>
-<script>
-(function diag(){
-  const box = document.createElement('div');
-  box.style.cssText = 'position:fixed;left:8px;right:8px;top:8px;z-index:99999;background:rgba(0,0,0,.75);color:#fff;font:12px system-ui;padding:8px;border-radius:10px;white-space:pre-wrap';
-  document.body.appendChild(box);
-  const log = (s)=> box.textContent += s + '\n';
-
-  const GAS_URL = "https://script.google.com/macros/s/AKfycbwPaiaNiLe_zuokBJTjwYma4pm845NWHnbK_OIIW4ZQCwaEedyZczvI_a4F-1p4iVjK/exec";
-
-  log('— Диагностика сети (WebView)…');
-
-  // A) Картинка с gstatic (должна загрузиться)
-  const imgOk = new Image();
-  imgOk.onload = ()=>log('A) gstatic IMG: ✅ доступно');
-  imgOk.onerror = ()=>log('A) gstatic IMG: ❌ недоступно (есть проблемы с сетью вообще)');
-  imgOk.src = 'https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png';
-
-  // B) Пиксель на GAS (обычный GET). onerror тут НОРМАЛЕН, если сервер не отдаёт картинку,
-  // нам важно, что сам запрос ушёл — проверим это пунктом C через openLink.
-  const ping = new Image();
-  ping.onload = ()=>log('B) GAS IMG(onload): ✅ (редко бывает)');
-  ping.onerror = ()=>log('B) GAS IMG(onerror): ⓘ запрос ушёл/ответ не картинка или домен заблокирован');
-  ping.src = GAS_URL + '?action=ping&ts=' + Date.now();
-
-  // C) Открыть GAS во внешнем браузере (если тут открывается — домен не заблокирован на уровне сети,
-  // блок именно внутри WebView). Нажми появившуюся ссылку.
-  const a = document.createElement('a');
-  a.href = GAS_URL + '?action=ping';
-  a.textContent = 'Открыть GAS во внешнем браузере (проверка C)';
-  a.style.cssText = 'display:block;margin-top:6px;color:#aee';
-  a.onclick = (ev)=>{ ev.preventDefault(); try{Telegram.WebApp.openLink(a.href);}catch(_){location.href=a.href;} };
-  box.appendChild(a);
-})();
-</script>
-
 </body>
 </html>
+
