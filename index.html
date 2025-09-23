@@ -231,28 +231,22 @@
       };
     }
 
-    <script>
-  async function onChoose(){
-  const uid = getUserId();
-  if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
-  if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
+    // ← ВАЖНО: без лишних <script>! Просто объявляем функцию здесь
+    async function onChoose(){
+      const uid = getUserId();
+      if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
+      if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
 
-  // важное: анти-кэш и гарантированное завершение записи на сервере
-  const qs = new URLSearchParams(getPayload());
-  const url = PROXY_URL + "?" + qs.toString() + "&v=" + Date.now();
+      const qs = new URLSearchParams(getPayload());
+      const url = PROXY_URL + "?" + qs.toString() + "&v=" + Date.now();
 
-  try {
-    await fetch(url, { method: "GET", cache: "no-store", mode: "no-cors" });
-  } catch (_) {
-    // даже если fetch в no-cors не вернёт ответ — запись всё равно ушла
-  }
+      try {
+        await fetch(url, { method: "GET", cache: "no-store", mode: "no-cors" });
+      } catch (_) {}
 
-  // маленькая пауза, чтобы GAS точно успел сохранить точку
-  setTimeout(() => { try { tg.close(); } catch(_){} }, 350);
-}
-
-</script>
+      setTimeout(() => { try { tg.close(); } catch(_){} }, 350);
+    }
+  </script>
 </body>
 </html>
-
 
