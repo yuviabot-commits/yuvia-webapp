@@ -227,7 +227,7 @@
         secret: BOT_SECRET, action: "save_place", user_id: getUserId(),
         title: selectedPlace?.name || "", address: selectedPlace?.address || "",
         lat: String(selectedPlace?.lat ?? ""), lon: String(selectedPlace?.lon ?? ""),
-        ts: String(Date.now())
+        ts: String(Date.now()) // анти-кэш на всем пути
       };
     }
 
@@ -248,5 +248,3 @@
   </script>
 </body>
 </html>
-
-
