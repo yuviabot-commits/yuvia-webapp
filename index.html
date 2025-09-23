@@ -105,6 +105,59 @@
     // и если 15 сек не выбрал — тоже
     setTimeout(() => { if (!window.selectedPlace) incFail(); }, NO_SELECT_TIMEOUT);
 
+    /* ==== эвристики Яндекса для выбора POI ==== */
+    const POI_KEYWORDS = [
+      'музей','галерея','усадьба','дворец','усыпальница','собор','церковь','монастырь',
+      'храм','крепость','кремль','башня','театр','консерватория','филармония',
+      'памятник','монумент','парк','сад','сквер','бульвар','набережная'
+    ];
+
+    function pickBestYandexObject(res, clickCoords) {
+      let best = null, bestScore = -1;
+      res.geoObjects.each(obj => {
+        const name = (obj.properties.get('name') || '').toString();
+        const text = (obj.properties.get('text') || '').toString();
+        const kind = obj.properties.get('metaDataProperty')?.GeocoderMetaData?.kind || '';
+        const objCoords = obj.geometry?.getCoordinates?.() || clickCoords;
+
+        let score = 0;
+
+        // 1) ключевые слова в имени/тексте
+        const hay = (name + ' ' + text).toLowerCase();
+        if (POI_KEYWORDS.some(w => hay.includes(w))) score += 3;
+
+        // 2) тип (подсветим потенциальные интересные)
+        if (['airport','railway','metro','museum','attraction','other'].includes(kind)) score += 1;
+
+        // 3) близость к клику (0..2 балла)
+        try {
+          const d = ymaps.coordSystem.geo.getDistance(clickCoords, objCoords); // м
+          score += Math.max(0, 2 - Math.min(d, 300) / 150);
+        } catch(e){}
+
+        if (score > bestScore) { bestScore = score; best = obj; }
+      });
+      return best;
+    }
+
+    async function resolveYandexPOI(coords) {
+      try {
+        const res = await ymaps.geocode(coords, { results: 10 });
+        const best = pickBestYandexObject(res, coords) || res.geoObjects.get(0);
+        if (!best) {
+          return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
+        }
+        return {
+          name: best.properties.get('name') || 'Точка на карте',
+          address: best.properties.get('text') || '',
+          lat: coords[0],
+          lon: coords[1]
+        };
+      } catch (_) {
+        return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
+      }
+    }
+
     /* ==== Карта ==== */
     let map, selectedPlace = null, mainBound = false;
 
@@ -134,34 +187,34 @@
         }
       } catch(_) {}
 
-      // Клик по карте
-      map.events.add("click", (e) => {
+      // Клик по карте → определяем POI Яндексом
+      map.events.add("click", async (e) => {
         const c = e.get("coords");
-        selectedPlace = { name: "Точка на карте", address: "", lat: c[0], lon: c[1] };
-        redraw(c, selectedPlace.name);
+        selectedPlace = await resolveYandexPOI(c);
+
+        map.geoObjects.removeAll();
+        map.geoObjects.add(new ymaps.Placemark([selectedPlace.lat, selectedPlace.lon], {
+          balloonContent: selectedPlace.name
+        }));
         ensureMainButton();
       });
 
-      // Выбор из поиска
-      searchControl.events.add("resultselect", (e) => {
+      // Выбор из поиска → нормализуем так же
+      searchControl.events.add("resultselect", async (e) => {
         const i = e.get("index");
         const res = searchControl.getResultsArray();
         const obj = res[i]; if (!obj) return;
         const c = obj.geometry.getCoordinates();
-        selectedPlace = {
-          name: obj.properties.get("name") || "Точка на карте",
-          address: obj.properties.get("description") || "",
-          lat: c[0], lon: c[1]
-        };
-        redraw(c, selectedPlace.name);
+
+        selectedPlace = await resolveYandexPOI(c);
+
+        map.geoObjects.removeAll();
+        map.geoObjects.add(new ymaps.Placemark([selectedPlace.lat, selectedPlace.lon], {
+          balloonContent: selectedPlace.name
+        }));
         ensureMainButton();
       });
     });
-
-    function redraw(coords, balloon){
-      map.geoObjects.removeAll();
-      map.geoObjects.add(new ymaps.Placemark(coords, { balloonContent: balloon || "" }));
-    }
 
     function ensureMainButton(){
       tg.MainButton.setText("Сохранить место");
@@ -195,10 +248,5 @@
   </script>
 </body>
 </html>
-
-
-
-
-
 
 
