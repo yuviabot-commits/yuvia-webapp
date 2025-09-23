@@ -231,20 +231,46 @@
       };
     }
 
-    function onChoose(){
-      const uid = getUserId();
-      if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
-      if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
+    <script>
+  async function onChoose(){
+    const uid = getUserId();
+    if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
+    if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
 
-      // успех — сбрасываем счётчик неудач
-      resetFails();
+    resetFails();
 
-      // надёжная отправка: GET-пиксель на прокси
-      const qs = new URLSearchParams(getPayload());
-      (new Image()).src = PROXY_URL + "?" + qs.toString();
+    // 1) Собираем payload
+    const qs = new URLSearchParams({
+      secret: BOT_SECRET,
+      action: "save_place",
+      user_id: uid,
+      title:  selectedPlace?.name || "",
+      address:selectedPlace?.address || "",
+      lat:    String(selectedPlace?.lat ?? ""),
+      lon:    String(selectedPlace?.lon ?? ""),
+      ts:     String(Date.now())          // анти-кэш и маркер свежести
+    });
 
-      setTimeout(() => { try { tg.close(); } catch(_) {} }, 300);
+    // 2) Шлём на прокси и ЖДЁМ ответ
+    //   (важно: НЕ через new Image(), а через fetch + await)
+    try {
+      const resp = await fetch(PROXY_URL + "?" + qs.toString(), {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Accept": "application/json" }
+      });
+
+      // небольшой «страховочный» лаг, чтобы запись гарантированно дошла до GAS
+      await new Promise(r => setTimeout(r, 400));
+    } catch (e) {
+      // не роняем UX, просто ждём чуть дольше
+      await new Promise(r => setTimeout(r, 800));
     }
-  </script>
+
+    // 3) Закрываем WebView
+    try { tg.close(); } catch(_) {}
+  }
+</script>
 </body>
 </html>
+
