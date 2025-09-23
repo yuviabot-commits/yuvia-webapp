@@ -232,21 +232,24 @@
     }
 
     // ← ВАЖНО: без лишних <script>! Просто объявляем функцию здесь
-    async function onChoose(){
-      const uid = getUserId();
-      if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
-      if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
+   async function onChoose(){
+  const uid = getUserId();
+  if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
+  if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
 
-      const qs = new URLSearchParams(getPayload());
-      const url = PROXY_URL + "?" + qs.toString() + "&v=" + Date.now();
+  // формируем URL с анти-кэшем
+  const qs  = new URLSearchParams(getPayload());
+  const url = PROXY_URL + "?" + qs.toString() + "&cacheBust=" + Date.now();
 
-      try {
-        await fetch(url, { method: "GET", cache: "no-store", mode: "no-cors" });
-      } catch (_) {}
+  // НАДЁЖНАЯ отправка: пиксель
+  const img = new Image();
+  img.src = url;
 
-      setTimeout(() => { try { tg.close(); } catch(_){} }, 350);
-    }
+  // даём сети гарантированно отработать
+  setTimeout(() => { try { tg.close(); } catch(_){} }, 600);
+}
   </script>
 </body>
 </html>
+
 
