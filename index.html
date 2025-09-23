@@ -62,6 +62,13 @@
       try { const u = tg?.initDataUnsafe?.user?.id; if (u) return String(u); } catch(_) {}
       return "";
     }
+    function getSid(){
+  try {
+    const qs = new URLSearchParams(location.search);
+    const s = qs.get("sid");
+    return s ? String(s) : "";
+  } catch(_) { return ""; }
+}
 
     /* ==== Подсказка: правила показа ==== */
     const hint   = document.getElementById('hint');
@@ -223,13 +230,18 @@
     }
 
     function getPayload(){
-      return {
-        secret: BOT_SECRET, action: "save_place", user_id: getUserId(),
-        title: selectedPlace?.name || "", address: selectedPlace?.address || "",
-        lat: String(selectedPlace?.lat ?? ""), lon: String(selectedPlace?.lon ?? ""),
-        ts: String(Date.now()) // анти-кэш на всем пути
-      };
-    }
+  return {
+    secret: BOT_SECRET,
+    action: "save_place",
+    user_id: getUserId(),
+    sid: getSid(),                        // ← добавили
+    title: selectedPlace?.name || "",
+    address: selectedPlace?.address || "",
+    lat: String(selectedPlace?.lat ?? ""),
+    lon: String(selectedPlace?.lon ?? ""),
+    ts: String(Date.now())
+  };
+}
 
     // ← ВАЖНО: без лишних <script>! Просто объявляем функцию здесь
    async function onChoose(){
@@ -251,5 +263,6 @@
   </script>
 </body>
 </html>
+
 
 
