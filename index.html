@@ -52,9 +52,6 @@
 <body>
   <div id="map"></div>
 
-  <!-- Кнопка «?» (если вдруг не появится, создадим её в JS) -->
-  <button id="helpBtn">?</button>
-
   <!-- Оверлей-подсказка -->
   <div id="hint">
     <div class="box">
@@ -138,6 +135,21 @@
 
       const searchControl = new ymaps.control.SearchControl({ provider: 'yandex#search' });
       map.controls.add(searchControl);
+      // Кнопка-подсказка как control Яндекс.Карт (правый верх)
+const helpControl = new ymaps.control.Button({
+  data: { content: ' ? ' },
+  options: {
+    selectOnClick: false,
+    maxWidth: 40
+  }
+});
+
+// позиционируем справа-сверху (не перекрывает поле поиска слева)
+map.controls.add(helpControl, { position: { top: 10, right: 10 } });
+
+// по клику открываем подсказку (openHint уже есть в коде)
+helpControl.events.add('click', openHint);
+
 
       // Центр по геолокации (если даст разрешение)
       try {
@@ -208,6 +220,7 @@
   </script>
 </body>
 </html>
+
 
 
 
