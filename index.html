@@ -253,16 +253,27 @@
   const qs  = new URLSearchParams(getPayload());
   const url = PROXY_URL + "?" + qs.toString() + "&cacheBust=" + Date.now();
 
-  // НАДЁЖНАЯ отправка: пиксель
+  // надёжная отправка: «пиксель»
   const img = new Image();
-  img.src = url;
 
-  // даём сети гарантированно отработать
-  setTimeout(() => { try { tg.close(); } catch(_){} }, 600);
+  // держим ссылку, чтобы GC не прибрал объект до отправки
+  window.__yuvia_last_pixel__ = img;
+
+  // Закрываем веб-апп сразу, как только запрос точно ушёл (успех/ошибка — не важно)
+  img.onload  = () => { try { tg.close(); } catch(_){} };
+  img.onerror = () => { try { tg.close(); } catch(_){} };
+
+  // Фолбэк-таймер: если onload/onerror вдруг не сработали,
+  // даём сети «форточку» побольше (1.5–2.0 секунды)
+  setTimeout(() => { try { tg.close(); } catch(_){} }, 1800);
+
+  // Старт отправки
+  img.src = url;
 }
-  </script>
+</script>
 </body>
 </html>
+
 
 
 
