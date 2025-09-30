@@ -2,22 +2,23 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>YuviaBot Map</title>
+  <title>YuviaBot • Карта</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body, #map { width:100%; height:100%; margin:0; padding:0; }
+    html, body, #map { width:100%; height:100%; margin:0; padding:0; background:#0e0e0e; }
 
     /* Оверлей-подсказка */
     #hint {
       position: fixed; inset: 0; display: none;
       align-items: center; justify-content: center;
-      background: rgba(0,0,0,.6); z-index: 99999;
+      background: rgba(0,0,0,.55); z-index: 99999;
     }
     #hint .box {
-      max-width: 92%; background: #111; color:#fff;
-      border-radius:14px; padding:16px;
+      max-width: 92%; background: #141414; color:#fff;
+      border-radius:14px; padding:16px 16px 14px;
       font: 14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;
       text-align: left; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,.06);
     }
     #hint .box h3 { margin:0 0 8px; font-size:16px }
     #hint .btn {
@@ -39,22 +40,22 @@
     <div class="box">
       <h3>Как пользоваться картой</h3>
       <div>
-        1) Найди достопримечательность через поиск или ткни её на карте.<br/>
-        2) Нажми «Сохранить место» — я подготовлю мини-экскурсию 🎧
+        1) Найдите место через поиск или нажмите на карту.<br/>
+        2) Нажмите «Сохранить место» — бот пришлёт карточку с ссылками 🎧
       </div>
       <button class="btn" id="hintOk">Понятно</button>
     </div>
   </div>
 
   <script>
-    /* ==== Telegram ==== */
-    const tg = window.Telegram.WebApp; tg.expand(); tg.ready();
+    /* ===== Константы (подставь свои при необходимости) ===== */
+    const PROXY_URL  = "https://yuvia-proxy.yuviabot.workers.dev/"; // прозрачный Worker
+    const BOT_SECRET = "8d7f3f2e2a6d44b5aeb4caa7f924c8f9";           // как в GAS
 
-    /* ==== Прокси (Cloudflare Worker) → GAS ==== */
-    const PROXY_URL = "https://yuvia-proxy.yuviabot.workers.dev/";
-    const BOT_SECRET = "8d7f3f2e2a6d44b5aeb4caa7f924c8f9";
+    /* ===== Telegram WebApp ===== */
+    const tg = window.Telegram.WebApp; try { tg.expand(); tg.ready(); } catch(_){}
 
-    /* ==== user_id из ?id= (или из initData) ==== */
+    /* ===== user_id и sid из URL/инициализации ===== */
     function getUserId(){
       const qs = new URLSearchParams(location.search);
       const fromQS = qs.get("id") || qs.get("user_id") || qs.get("contact_id");
@@ -63,23 +64,18 @@
       return "";
     }
     function getSid(){
-  try {
-    const qs = new URLSearchParams(location.search);
-    const s = qs.get("sid");
-    return s ? String(s) : "";
-  } catch(_) { return ""; }
-}
+      try { return String(new URLSearchParams(location.search).get("sid") || ""); } catch(_) { return ""; }
+    }
 
-    /* ==== Подсказка: правила показа ==== */
+    /* ===== Подсказка: показываем не чаще раза в день, + при неудачах ===== */
     const hint   = document.getElementById('hint');
     const hintOk = document.getElementById('hintOk');
 
-    // версия подсказки (изменишь текст — измени версию)
     const HINT_VER          = 'v3';
     const KEY_LAST_SHOWN    = 'yuvia_hint_last_' + HINT_VER; // YYYY-MM-DD
     const KEY_FAILS         = 'yuvia_hint_fails_' + HINT_VER;
-    const FAILS_THRESHOLD   = 2;       // показать снова, если 1–2 раза закрыли без выбора
-    const NO_SELECT_TIMEOUT = 15000;   // 15 сек — считаем неудачей
+    const FAILS_THRESHOLD   = 2;       // после 2 «неудач» показать снова
+    const NO_SELECT_TIMEOUT = 15000;   // 15 сек без выбора — считаем неудачей
 
     function todayStr(){
       const d = new Date(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
@@ -87,32 +83,27 @@
     }
     function getInt(k){ return Number(localStorage.getItem(k) || 0); }
     function setInt(k,v){ localStorage.setItem(k, String(v)); }
-
+    function showHint(){ hint.style.display='flex'; }
+    function closeHint(){ hint.style.display='none'; localStorage.setItem(KEY_LAST_SHOWN, todayStr()); localStorage.removeItem(KEY_FAILS); }
+    function incFail(){ setInt(KEY_FAILS, getInt(KEY_FAILS)+1); }
     function shouldShowHint(){
-      const last  = localStorage.getItem(KEY_LAST_SHOWN);
+      const last = localStorage.getItem(KEY_LAST_SHOWN);
       const fails = getInt(KEY_FAILS);
-      if (!last) return true;                   // первый запуск
-      if (last !== todayStr()) return true;     // первый запуск за день
-      if (fails >= FAILS_THRESHOLD) return true;// несколько неудач подряд
+      if (!last) return true;
+      if (last !== todayStr()) return true;
+      if (fails >= FAILS_THRESHOLD) return true;
       return false;
     }
-    function markHintShownToday(){ localStorage.setItem(KEY_LAST_SHOWN, todayStr()); localStorage.removeItem(KEY_FAILS); }
-    function incFail(){ setInt(KEY_FAILS, getInt(KEY_FAILS)+1); }
-    function resetFails(){ localStorage.removeItem(KEY_FAILS); }
-    function openHint(){ hint.style.display='flex'; }
-    function closeHint(){ hint.style.display='none'; markHintShownToday(); }
-
-    if (shouldShowHint()) openHint();
+    if (shouldShowHint()) showHint();
     hintOk.onclick = closeHint;
 
-    // если пользователь ушёл со страницы без выбора — считаем неудачей
+    // если пользователь ушёл со страницы без выбора — увеличим счётчик
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && !window.selectedPlace) incFail();
     });
-    // и если 15 сек не выбрал — тоже
     setTimeout(() => { if (!window.selectedPlace) incFail(); }, NO_SELECT_TIMEOUT);
 
-    /* ==== эвристики Яндекса для выбора POI ==== */
+    /* ===== Подготовка эвристик для POI Яндекса ===== */
     const POI_KEYWORDS = [
       'музей','галерея','усадьба','дворец','усыпальница','собор','церковь','монастырь',
       'храм','крепость','кремль','башня','театр','консерватория','филармония',
@@ -128,20 +119,13 @@
         const objCoords = obj.geometry?.getCoordinates?.() || clickCoords;
 
         let score = 0;
-
-        // 1) ключевые слова в имени/тексте
         const hay = (name + ' ' + text).toLowerCase();
         if (POI_KEYWORDS.some(w => hay.includes(w))) score += 3;
-
-        // 2) тип (подсветим потенциальные интересные)
         if (['airport','railway','metro','museum','attraction','other'].includes(kind)) score += 1;
-
-        // 3) близость к клику (0..2 балла)
         try {
           const d = ymaps.coordSystem.geo.getDistance(clickCoords, objCoords); // м
           score += Math.max(0, 2 - Math.min(d, 300) / 150);
         } catch(e){}
-
         if (score > bestScore) { bestScore = score; best = obj; }
       });
       return best;
@@ -165,7 +149,7 @@
       }
     }
 
-    /* ==== Карта ==== */
+    /* ===== Карта ===== */
     let map, selectedPlace = null, mainBound = false;
 
     ymaps.ready(() => {
@@ -175,16 +159,16 @@
       const searchControl = new ymaps.control.SearchControl({ provider: 'yandex#search' });
       map.controls.add(searchControl);
 
-      // Кнопка-подсказка как control (правый верх; на iOS чутка ниже шапки)
+      // Кнопка-подсказка в правом верхнем углу
       const iosTop = (window.Telegram?.WebApp?.platform === 'ios') ? 52 : 10;
       const helpControl = new ymaps.control.Button({
         data: { content: ' ? ' },
         options: { selectOnClick: false, maxWidth: 40 }
       });
       map.controls.add(helpControl, { position: { top: iosTop, right: 10 } });
-      helpControl.events.add('click', openHint);
+      helpControl.events.add('click', showHint);
 
-      // Центр по геолокации (если даст разрешение)
+      // Центр по геолокации (если разрешено)
       try {
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
@@ -194,7 +178,7 @@
         }
       } catch(_) {}
 
-      // Клик по карте → определяем POI Яндексом
+      // Клик по карте
       map.events.add("click", async (e) => {
         const c = e.get("coords");
         selectedPlace = await resolveYandexPOI(c);
@@ -206,8 +190,8 @@
         ensureMainButton();
       });
 
-      // Выбор из поиска → нормализуем так же
-      searchControl.events.add("resultselect", async (e) => {
+      // Выбор из поиска
+      const onSearchSelect = async (e) => {
         const i = e.get("index");
         const res = searchControl.getResultsArray();
         const obj = res[i]; if (!obj) return;
@@ -220,60 +204,55 @@
           balloonContent: selectedPlace.name
         }));
         ensureMainButton();
-      });
+      };
+      searchControl.events.add("resultselect", onSearchSelect);
     });
 
     function ensureMainButton(){
-      tg.MainButton.setText("Сохранить место");
-      tg.MainButton.show(); tg.MainButton.enable();
-      if (!mainBound){ mainBound = true; Telegram.WebApp.MainButton.onClick(onChoose); }
+      try{
+        tg.MainButton.setText("Сохранить место");
+        tg.MainButton.show(); tg.MainButton.enable();
+        if (!mainBound){
+          mainBound = true;
+          Telegram.WebApp.MainButton.onClick(onChoose);
+        }
+      }catch(_){}
     }
 
-    function getPayload(){
-  return {
-    secret: BOT_SECRET,
-    action: "save_place",
-    user_id: getUserId(),
-    sid: getSid(),                        // ← добавили
-    title: selectedPlace?.name || "",
-    address: selectedPlace?.address || "",
-    lat: String(selectedPlace?.lat ?? ""),
-    lon: String(selectedPlace?.lon ?? ""),
-    ts: String(Date.now())
-  };
-}
+    /* ===== Формирование и отправка JSON на Worker (→ GAS) ===== */
+    function buildPayload(){
+      return {
+        secret:  BOT_SECRET,
+        action:  "guide_save_place",
+        user_id: getUserId(),
+        sid:     getSid(),
+        lat:     Number(selectedPlace?.lat ?? 0),
+        lon:     Number(selectedPlace?.lon ?? 0),
+        title:   selectedPlace?.name    || "",
+        address: selectedPlace?.address || "",
+        source:  "webapp"
+      };
+    }
 
-    // ← ВАЖНО: без лишних <script>! Просто объявляем функцию здесь
-   async function onChoose(){
-  const uid = getUserId();
-  if (!uid){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
-  if (!selectedPlace){ try{ tg.showAlert("Сначала выбери точку на карте"); }catch(_){} return; }
+    async function onChoose(){
+      if (!getUserId()){ try{ tg.showAlert("Не удалось получить user_id. Открой ссылку с ?id={{id}}"); }catch(_){} return; }
+      if (!selectedPlace){ try{ tg.showAlert("Сначала выберите точку на карте"); }catch(_){} return; }
 
-  // формируем URL с анти-кэшем
-  const qs  = new URLSearchParams(getPayload());
-  const url = PROXY_URL + "?" + qs.toString() + "&cacheBust=" + Date.now();
+      try{
+        tg?.MainButton.setText("Сохранение…"); tg?.MainButton.disable();
 
-  // надёжная отправка: «пиксель»
-  const img = new Image();
-
-  // держим ссылку, чтобы GC не прибрал объект до отправки
-  window.__yuvia_last_pixel__ = img;
-
-  // Закрываем веб-апп сразу, как только запрос точно ушёл (успех/ошибка — не важно)
-  img.onload  = () => { try { tg.close(); } catch(_){} };
-  img.onerror = () => { try { tg.close(); } catch(_){} };
-
-  // Фолбэк-таймер: если onload/onerror вдруг не сработали,
-  // даём сети «форточку» побольше (1.5–2.0 секунды)
-  setTimeout(() => { try { tg.close(); } catch(_){} }, 1800);
-
-  // Старт отправки
-  img.src = url;
-}
-</script>
+        await fetch(PROXY_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildPayload())
+        });
+        // Ответ нам не нужен — карточку отправит GAS
+      }catch(_){
+        // Можно показать уведомление, но чаще достаточно просто закрыть
+      }finally{
+        try{ tg.close(); }catch(_){}
+      }
+    }
+  </script>
 </body>
 </html>
-
-
-
-
