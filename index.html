@@ -101,76 +101,110 @@
     });
     setTimeout(() => { if (!window.selectedPlace) incFail(); }, NO_SELECT_TIMEOUT);
 
-    /* ===== Эвристика для тапа по карте ===== */
-    const POI_KEYWORDS = [
-  'музей','галерея','третьяков','эрмитаж','историческ','выставочн',
-  'усадьба','дворец','усыпальница','собор','церковь','монастырь','храм',
-  'крепость','кремль','башня','театр','консерватория','филармония',
-  'памятник','монумент','скульптура','мемориал',
-  'парк','сад','сквер','бульвар','набережная'
-];
+   // точный «домовой» обратный геокод через REST (kind=house)
+async function yaReverseHouse(lat, lon) {
+  const url = 'https://geocode-maps.yandex.ru/1.x/?format=json'
+    + '&lang=ru_RU'
+    + '&kind=house'
+    + '&results=5'
+    + '&geocode=' + encodeURIComponent(`${lon},${lat}`)
+    + '&apikey=f08ffb69-0b44-40a1-a11c-4980f7e574b6';
 
-// стоп-слова для административки
-const ADMIN_NEG = [
-  'район','административный округ','округ','внутригородск','поселение',
-  'улица','проспект','переулок','шоссе','проезд','площадь','набережная района'
-];
+  try{
+    const r = await fetch(url);
+    const j = await r.json();
+    const fm = (((j.response||{}).GeoObjectCollection||{}).featureMember)||[];
+    if (!fm.length) return null;
 
-// максимум 120 м от клика; дальше — считаем «не наша точка»
-const MAX_PICK_RADIUS_M = 120;
+    // возьмём первый точный/наиболее детальный
+    let pick = null, bestPrec = -1;
+    const precOrder = { 'exact':4, 'number':3, 'entrance':3, 'street':2, 'near':1, 'other':0 };
+    for (const m of fm) {
+      const go = (m.GeoObject||{});
+      const md = ((go.metaDataProperty||{}).GeocoderMetaData)||{};
+      const p  = String(md.precision||'other').toLowerCase();
+      const sc = precOrder[p] ?? 0;
+      if (sc > bestPrec) { bestPrec = sc; pick = { go, md }; }
+    }
+    if (!pick) return null;
 
-function pickBestYandexObject(res, clickCoords) {
-  let best = null, bestScore = -1;
+    const comp = (((pick.md.Address||{}).Components)||[]);
 
+    return {
+      kind:      String(pick.md.kind||''),
+      name:      String(pick.go.name||''),  // иногда «Корпус …»
+      text:      String(pick.md.text||''),  // полный адрес строкой
+      precision: String(pick.md.precision||''),
+      components: comp,                     // массив составных частей адреса
+      raw:       pick
+    };
+  }catch(_){ return null; }
+}
+
+// собираем «кандидатов» рядом через JS API (тип/имя/дистанция)
+async function yaNearbyCandidates(coords, limit = 20) {
+  const res = await ymaps.geocode(coords, { results: limit });
+  const arr = [];
   res.geoObjects.each(obj => {
-    const name = (obj.properties.get('name') || '').toString();
-    const text = (obj.properties.get('text') || '').toString();
-    const md   = obj.properties.get('metaDataProperty')?.GeocoderMetaData || {};
-    const kind = (md.kind || '').toString().toLowerCase();
-    const objCoords = obj.geometry?.getCoordinates?.() || clickCoords;
-
-    // расстояние
-    let dist = Infinity;
-    try { dist = ymaps.coordSystem.geo.getDistance(clickCoords, objCoords); } catch(e){}
-
-    // ЖЁСТКИЙ отсев по радиусу
-    if (!(isFinite(dist) && dist <= MAX_PICK_RADIUS_M)) return;
-
-    let score = 0;
-    const hay = (name + ' ' + text).toLowerCase();
-
-    // штрафуем админку/улицы
-    if (ADMIN_NEG.some(w => hay.includes(w))) score -= 5;
-
-    // бустим музей/парк/памятник и т.п.
-    if (POI_KEYWORDS.some(w => hay.includes(w))) score += 6;
-
-    // лёгкий бонус за «не-админ» виды (в JS API kind для POI часто "other")
-    if (!['country','province','district','locality','area','hydro','route','vegetation'].includes(kind)) {
-      score += 1;
-    }
-
-    // чем ближе — тем лучше: 0..2 балла
-    if (isFinite(dist)) {
-      score += Math.max(0, 2 - dist / 60); // 0–2 балла в пределах ~120 м
-    }
-
-    if (score > bestScore) { bestScore = score; best = obj; }
+    try{
+      const md   = obj.properties.get('metaDataProperty')?.GeocoderMetaData || {};
+      const name = (obj.properties.get('name') || '').toString();
+      const text = (obj.properties.get('text') || '').toString();
+      const kind = String(md.kind || '').toLowerCase();
+      const c    = obj.geometry?.getCoordinates?.() || coords;
+      const dist = ymaps.coordSystem.geo.getDistance(coords, c);
+      arr.push({ name, text, kind, dist: isFinite(dist)?Math.round(dist):null, coords:c });
+    }catch(_){}
   });
+  // ближние и «по делу» поднимем по списку ключевых
+  const KW = ['музей','галер','театр','памятник','монумент','усадьб','кремль','собор','храм','дворец','историческ'];
+  arr.sort((a,b) => {
+    const ka = KW.some(k => (a.name+a.text).toLowerCase().includes(k)) ? 0 : 1;
+    const kb = KW.some(k => (b.name+b.text).toLowerCase().includes(k)) ? 0 : 1;
+    if (ka !== kb) return ka - kb;
+    const da = (a.dist ?? 1e9), db = (b.dist ?? 1e9);
+    return da - db;
+  });
+  return arr;
+}
 
-  return best;
+// итоговый резолвер: адрес дома + лучший кандидат; остальное — в extra
+async function resolveYandexPOI(coords) {
+  const [lat, lon] = coords;
+
+  // A) точный адрес (дом/вход)
+  const house = await yaReverseHouse(lat, lon);
+
+  // B) кандидаты вокруг (памятники/улицы/площади и т.д.)
+  let candidates = [];
+  try { candidates = await yaNearbyCandidates(coords, 25); } catch(_) {}
+
+  // главный «лейбл» для карточки:
+  // - если у дома precision >= number — берём адрес как title (точка именно в здании)
+  // - иначе берём ближайшего «интересного» кандидата; fallback — «Точка на карте»
+  let title = 'Точка на карте';
+  let address = '';
+
+  const precGood = new Set(['exact','number','entrance']);
+  if (house && precGood.has(String(house.precision||'').toLowerCase())) {
+    title   = house.name || 'Здание';
+    address = house.text || '';
+  } else if (candidates.length) {
+    title   = candidates[0].name || 'Объект рядом';
+    address = candidates[0].text || '';
+  }
+
+  return {
+    name:    title || 'Точка на карте',
+    address: address || '',
+    lat, lon,
+    // богато упакуем контекст для ИИ/аналитики
+    _extra: {
+      y_house: house,           // kind/precision/components/…
+      y_nearby: candidates      // массив {name,text,kind,dist,coords}
     }
-
-   async function resolveYandexPOI(coords) {
-  try {
-    // просим побольше кандидатов рядом с кликом
-    const res  = await ymaps.geocode(coords, { results: 25 });
-    const best = pickBestYandexObject(res, coords);
-
-    // ЕСЛИ в радиусе 120 м ничего «вменяемого» не нашли — не притворяемся адресом
-    if (!best) {
-      return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
-    }
+  };
+}
 
     // нашли хороший POI рядом
     return {
@@ -257,19 +291,19 @@ function pickBestYandexObject(res, clickCoords) {
 
     /* ===== Отправка в Worker (→ GAS) ===== */
     function buildPayload(){
-      return {
-        secret : BOT_SECRET,
-        action : "guide_save_place",
-        user_id: getUserId(),
-        sid    : getSid(),
-        lat    : Number(selectedPlace?.lat ?? 0),
-        lon    : Number(selectedPlace?.lon ?? 0),
-        title  : selectedPlace?.name    || "",
-        address: selectedPlace?.address || "",
-        source : "webapp"
-      };
-    }
-
+  return {
+    secret:  BOT_SECRET,
+    action:  "guide_save_place",
+    user_id: getUserId(),
+    sid:     getSid(),
+    lat:     Number(selectedPlace?.lat ?? 0),
+    lon:     Number(selectedPlace?.lon ?? 0),
+    title:   selectedPlace?.name    || "",
+    address: selectedPlace?.address || "",
+    source:  "webapp",
+    extra:   selectedPlace?._extra || null   // ← кладём весь контекст
+  };
+}
     async function postJsonWithFallback(url, data){
       try{
         await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(data) });
@@ -297,6 +331,7 @@ function pickBestYandexObject(res, clickCoords) {
   </script>
 </body>
 </html>
+
 
 
 
