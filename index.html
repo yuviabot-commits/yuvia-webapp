@@ -206,17 +206,6 @@ async function resolveYandexPOI(coords) {
   };
 }
 
-    // нашли хороший POI рядом
-    return {
-      name:    best.properties.get('name') || 'Точка на карте',
-      address: best.properties.get('text') || '',
-      lat:     coords[0],
-      lon:     coords[1]
-    };
-  } catch (_) {
-    return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
-  }
-    }
 
     /* ===== Карта ===== */
     let map, selectedPlace = null, mainBound = false;
@@ -331,6 +320,7 @@ async function resolveYandexPOI(coords) {
   </script>
 </body>
 </html>
+
 
 
 
