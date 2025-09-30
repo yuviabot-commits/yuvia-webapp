@@ -103,50 +103,85 @@
 
     /* ===== Эвристика для тапа по карте ===== */
     const POI_KEYWORDS = [
-      'музей','галерея','усадьба','дворец','усыпальница','собор','церковь','монастырь',
-      'храм','крепость','кремль','башня','театр','консерватория','филармония',
-      'памятник','монумент','скульптура','парк','сад','сквер','бульвар','набережная',
-      'арт','выставка','центр искусств','исторический музей','картинная галерея',
-      'третьяков','пушкинский','эрмитаж','русский музей','гмии'
-    ];
-    const MUSEUM_LIKE = ['museum','attraction','other']; // небольшой приоритет
+  'музей','галерея','третьяков','эрмитаж','историческ','выставочн',
+  'усадьба','дворец','усыпальница','собор','церковь','монастырь','храм',
+  'крепость','кремль','башня','театр','консерватория','филармония',
+  'памятник','монумент','скульптура','мемориал',
+  'парк','сад','сквер','бульвар','набережная'
+];
 
-    function pickBestYandexObject(res, clickCoords) {
-      let best = null, bestScore = -1;
-      res.geoObjects.each(obj => {
-        const p    = obj.properties;
-        const name = (p.get('name') || '').toString();
-        const text = (p.get('text') || '').toString();
-        const md   = p.get('metaDataProperty')?.GeocoderMetaData || {};
-        const kind = (md.kind || '').toString();
-        const objC = obj.geometry?.getCoordinates?.() || clickCoords;
+// стоп-слова для административки
+const ADMIN_NEG = [
+  'район','административный округ','округ','внутригородск','поселение',
+  'улица','проспект','переулок','шоссе','проезд','площадь','набережная района'
+];
 
-        let score = 0;
-        const hay = (name + ' ' + text).toLowerCase();
-        if (POI_KEYWORDS.some(w => hay.includes(w))) score += 3;
-        if (MUSEUM_LIKE.includes(kind)) score += 1;
-        try {
-          const d = ymaps.coordSystem.geo.getDistance(clickCoords, objC); // м
-          score += Math.max(0, 2 - Math.min(d, 400) / 200);
-        } catch(e){}
-        if (score > bestScore) { bestScore = score; best = obj; }
-      });
-      return best;
+// максимум 120 м от клика; дальше — считаем «не наша точка»
+const MAX_PICK_RADIUS_M = 120;
+
+function pickBestYandexObject(res, clickCoords) {
+  let best = null, bestScore = -1;
+
+  res.geoObjects.each(obj => {
+    const name = (obj.properties.get('name') || '').toString();
+    const text = (obj.properties.get('text') || '').toString();
+    const md   = obj.properties.get('metaDataProperty')?.GeocoderMetaData || {};
+    const kind = (md.kind || '').toString().toLowerCase();
+    const objCoords = obj.geometry?.getCoordinates?.() || clickCoords;
+
+    // расстояние
+    let dist = Infinity;
+    try { dist = ymaps.coordSystem.geo.getDistance(clickCoords, objCoords); } catch(e){}
+
+    // ЖЁСТКИЙ отсев по радиусу
+    if (!(isFinite(dist) && dist <= MAX_PICK_RADIUS_M)) return;
+
+    let score = 0;
+    const hay = (name + ' ' + text).toLowerCase();
+
+    // штрафуем админку/улицы
+    if (ADMIN_NEG.some(w => hay.includes(w))) score -= 5;
+
+    // бустим музей/парк/памятник и т.п.
+    if (POI_KEYWORDS.some(w => hay.includes(w))) score += 6;
+
+    // лёгкий бонус за «не-админ» виды (в JS API kind для POI часто "other")
+    if (!['country','province','district','locality','area','hydro','route','vegetation'].includes(kind)) {
+      score += 1;
     }
 
-    async function resolveYandexPOI(coords) {
-      try {
-        const res  = await ymaps.geocode(coords, { results: 10 });
-        const best = pickBestYandexObject(res, coords) || res.geoObjects.get(0);
-        if (!best) return { name:'Точка на карте', address:'', lat:coords[0], lon:coords[1] };
-        return {
-          name: best.properties.get('name') || 'Точка на карте',
-          address: best.properties.get('text') || '',
-          lat: coords[0], lon: coords[1]
-        };
-      } catch (_) {
-        return { name:'Точка на карте', address:'', lat:coords[0], lon:coords[1] };
-      }
+    // чем ближе — тем лучше: 0..2 балла
+    if (isFinite(dist)) {
+      score += Math.max(0, 2 - dist / 60); // 0–2 балла в пределах ~120 м
+    }
+
+    if (score > bestScore) { bestScore = score; best = obj; }
+  });
+
+  return best;
+    }
+
+   async function resolveYandexPOI(coords) {
+  try {
+    // просим побольше кандидатов рядом с кликом
+    const res  = await ymaps.geocode(coords, { results: 25 });
+    const best = pickBestYandexObject(res, coords);
+
+    // ЕСЛИ в радиусе 120 м ничего «вменяемого» не нашли — не притворяемся адресом
+    if (!best) {
+      return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
+    }
+
+    // нашли хороший POI рядом
+    return {
+      name:    best.properties.get('name') || 'Точка на карте',
+      address: best.properties.get('text') || '',
+      lat:     coords[0],
+      lon:     coords[1]
+    };
+  } catch (_) {
+    return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
+  }
     }
 
     /* ===== Карта ===== */
@@ -262,5 +297,6 @@
   </script>
 </body>
 </html>
+
 
 
