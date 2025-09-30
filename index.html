@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body, #map { width:100%; height:100%; margin:0; padding:0; background:#0e0e0e; }
-
     /* Оверлей-подсказка */
     #hint {
       position: fixed; inset: 0; display: none;
@@ -35,7 +34,7 @@
 <body>
   <div id="map"></div>
 
-  <!-- Оверлей-подсказка -->
+  <!-- Оверлей-подсказка (оставила без изменений) -->
   <div id="hint">
     <div class="box">
       <h3>Как пользоваться картой</h3>
@@ -48,14 +47,14 @@
   </div>
 
   <script>
-    /* ===== Константы (подставь свои при необходимости) ===== */
+    /* ===== Константы ===== */
     const PROXY_URL  = "https://yuvia-proxy.yuviabot.workers.dev/"; // прозрачный Worker
     const BOT_SECRET = "8d7f3f2e2a6d44b5aeb4caa7f924c8f9";           // как в GAS
 
     /* ===== Telegram WebApp ===== */
     const tg = window.Telegram.WebApp; try { tg.expand(); tg.ready(); } catch(_){}
 
-    /* ===== user_id и sid из URL/инициализации ===== */
+    /* ===== user_id и sid ===== */
     function getUserId(){
       const qs = new URLSearchParams(location.search);
       const fromQS = qs.get("id") || qs.get("user_id") || qs.get("contact_id");
@@ -67,15 +66,15 @@
       try { return String(new URLSearchParams(location.search).get("sid") || ""); } catch(_) { return ""; }
     }
 
-    /* ===== Подсказка: показываем не чаще раза в день, + при неудачах ===== */
+    /* ===== Подсказка (как было) ===== */
     const hint   = document.getElementById('hint');
     const hintOk = document.getElementById('hintOk');
 
     const HINT_VER          = 'v3';
     const KEY_LAST_SHOWN    = 'yuvia_hint_last_' + HINT_VER; // YYYY-MM-DD
     const KEY_FAILS         = 'yuvia_hint_fails_' + HINT_VER;
-    const FAILS_THRESHOLD   = 2;       // после 2 «неудач» показать снова
-    const NO_SELECT_TIMEOUT = 15000;   // 15 сек без выбора — считаем неудачей
+    const FAILS_THRESHOLD   = 2;
+    const NO_SELECT_TIMEOUT = 15000;
 
     function todayStr(){
       const d = new Date(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
@@ -97,34 +96,38 @@
     if (shouldShowHint()) showHint();
     hintOk.onclick = closeHint;
 
-    // если пользователь ушёл со страницы без выбора — увеличим счётчик
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && !window.selectedPlace) incFail();
     });
     setTimeout(() => { if (!window.selectedPlace) incFail(); }, NO_SELECT_TIMEOUT);
 
-    /* ===== Подготовка эвристик для POI Яндекса ===== */
+    /* ===== Эвристика для тапа по карте ===== */
     const POI_KEYWORDS = [
       'музей','галерея','усадьба','дворец','усыпальница','собор','церковь','монастырь',
       'храм','крепость','кремль','башня','театр','консерватория','филармония',
-      'памятник','монумент','парк','сад','сквер','бульвар','набережная'
+      'памятник','монумент','скульптура','парк','сад','сквер','бульвар','набережная',
+      'арт','выставка','центр искусств','исторический музей','картинная галерея',
+      'третьяков','пушкинский','эрмитаж','русский музей','гмии'
     ];
+    const MUSEUM_LIKE = ['museum','attraction','other']; // небольшой приоритет
 
     function pickBestYandexObject(res, clickCoords) {
       let best = null, bestScore = -1;
       res.geoObjects.each(obj => {
-        const name = (obj.properties.get('name') || '').toString();
-        const text = (obj.properties.get('text') || '').toString();
-        const kind = obj.properties.get('metaDataProperty')?.GeocoderMetaData?.kind || '';
-        const objCoords = obj.geometry?.getCoordinates?.() || clickCoords;
+        const p    = obj.properties;
+        const name = (p.get('name') || '').toString();
+        const text = (p.get('text') || '').toString();
+        const md   = p.get('metaDataProperty')?.GeocoderMetaData || {};
+        const kind = (md.kind || '').toString();
+        const objC = obj.geometry?.getCoordinates?.() || clickCoords;
 
         let score = 0;
         const hay = (name + ' ' + text).toLowerCase();
         if (POI_KEYWORDS.some(w => hay.includes(w))) score += 3;
-        if (['airport','railway','metro','museum','attraction','other'].includes(kind)) score += 1;
+        if (MUSEUM_LIKE.includes(kind)) score += 1;
         try {
-          const d = ymaps.coordSystem.geo.getDistance(clickCoords, objCoords); // м
-          score += Math.max(0, 2 - Math.min(d, 300) / 150);
+          const d = ymaps.coordSystem.geo.getDistance(clickCoords, objC); // м
+          score += Math.max(0, 2 - Math.min(d, 400) / 200);
         } catch(e){}
         if (score > bestScore) { bestScore = score; best = obj; }
       });
@@ -133,19 +136,16 @@
 
     async function resolveYandexPOI(coords) {
       try {
-        const res = await ymaps.geocode(coords, { results: 10 });
+        const res  = await ymaps.geocode(coords, { results: 10 });
         const best = pickBestYandexObject(res, coords) || res.geoObjects.get(0);
-        if (!best) {
-          return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
-        }
+        if (!best) return { name:'Точка на карте', address:'', lat:coords[0], lon:coords[1] };
         return {
           name: best.properties.get('name') || 'Точка на карте',
           address: best.properties.get('text') || '',
-          lat: coords[0],
-          lon: coords[1]
+          lat: coords[0], lon: coords[1]
         };
       } catch (_) {
-        return { name: 'Точка на карте', address: '', lat: coords[0], lon: coords[1] };
+        return { name:'Точка на карте', address:'', lat:coords[0], lon:coords[1] };
       }
     }
 
@@ -159,7 +159,7 @@
       const searchControl = new ymaps.control.SearchControl({ provider: 'yandex#search' });
       map.controls.add(searchControl);
 
-      // Кнопка-подсказка в правом верхнем углу
+      // Кнопка-подсказка (как просила, сохранила)
       const iosTop = (window.Telegram?.WebApp?.platform === 'ios') ? 52 : 10;
       const helpControl = new ymaps.control.Button({
         data: { content: ' ? ' },
@@ -168,7 +168,7 @@
       map.controls.add(helpControl, { position: { top: iosTop, right: 10 } });
       helpControl.events.add('click', showHint);
 
-      // Центр по геолокации (если разрешено)
+      // Центр по геолокации (если даст разрешение)
       try {
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
@@ -178,35 +178,36 @@
         }
       } catch(_) {}
 
-      // Клик по карте
+      // 1) Тап по карте → используем эвристику (как раньше)
       map.events.add("click", async (e) => {
         const c = e.get("coords");
         selectedPlace = await resolveYandexPOI(c);
-
-        map.geoObjects.removeAll();
-        map.geoObjects.add(new ymaps.Placemark([selectedPlace.lat, selectedPlace.lon], {
-          balloonContent: selectedPlace.name
-        }));
+        drawPin(selectedPlace.lat, selectedPlace.lon, selectedPlace.name);
         ensureMainButton();
       });
 
-      // Выбор из поиска
-      const onSearchSelect = async (e) => {
-        const i = e.get("index");
-        const res = searchControl.getResultsArray();
-        const obj = res[i]; if (!obj) return;
-        const c = obj.geometry.getCoordinates();
+      // 2) Выбор из поиска → БЕЗ геокодинга: берём поля прямо из результата
+      searchControl.events.add("resultselect", (e) => {
+        const i   = e.get("index");
+        const arr = searchControl.getResultsArray();
+        const obj = arr[i]; if (!obj) return;
 
-        selectedPlace = await resolveYandexPOI(c);
+        const p    = obj.properties;
+        const name = (p.get('name') || p.get('text') || 'Точка на карте').toString();
+        // у поиска обычно есть и name, и text: name — кратко, text — полный адрес/описание
+        const addr = (p.get('text') || p.get('description') || '').toString();
+        const c    = obj.geometry.getCoordinates();
 
-        map.geoObjects.removeAll();
-        map.geoObjects.add(new ymaps.Placemark([selectedPlace.lat, selectedPlace.lon], {
-          balloonContent: selectedPlace.name
-        }));
+        selectedPlace = { name, address: addr, lat: c[0], lon: c[1] };
+        drawPin(c[0], c[1], name);
         ensureMainButton();
-      };
-      searchControl.events.add("resultselect", onSearchSelect);
+      });
     });
+
+    function drawPin(lat, lon, title){
+      map.geoObjects.removeAll();
+      map.geoObjects.add(new ymaps.Placemark([lat, lon], { balloonContent: title || '' }));
+    }
 
     function ensureMainButton(){
       try{
@@ -219,19 +220,32 @@
       }catch(_){}
     }
 
-    /* ===== Формирование и отправка JSON на Worker (→ GAS) ===== */
+    /* ===== Отправка в Worker (→ GAS) ===== */
     function buildPayload(){
       return {
-        secret:  BOT_SECRET,
-        action:  "guide_save_place",
+        secret : BOT_SECRET,
+        action : "guide_save_place",
         user_id: getUserId(),
-        sid:     getSid(),
-        lat:     Number(selectedPlace?.lat ?? 0),
-        lon:     Number(selectedPlace?.lon ?? 0),
-        title:   selectedPlace?.name    || "",
+        sid    : getSid(),
+        lat    : Number(selectedPlace?.lat ?? 0),
+        lon    : Number(selectedPlace?.lon ?? 0),
+        title  : selectedPlace?.name    || "",
         address: selectedPlace?.address || "",
-        source:  "webapp"
+        source : "webapp"
       };
+    }
+
+    async function postJsonWithFallback(url, data){
+      try{
+        await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(data) });
+      }catch(_){
+        // fallback «пиксель» – гарантируем уход запроса даже при странной сети
+        const qs = new URLSearchParams(Object.entries(data).map(([k,v])=>[k, typeof v==='object'?JSON.stringify(v):String(v)]));
+        const img = new Image();
+        window.__yuvia_last_pixel__ = img;
+        img.src = url + "?" + qs.toString() + "&cb=" + Date.now();
+        await new Promise(r => setTimeout(r, 800)); // короткая форточка
+      }
     }
 
     async function onChoose(){
@@ -240,15 +254,7 @@
 
       try{
         tg?.MainButton.setText("Сохранение…"); tg?.MainButton.disable();
-
-        await fetch(PROXY_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildPayload())
-        });
-        // Ответ нам не нужен — карточку отправит GAS
-      }catch(_){
-        // Можно показать уведомление, но чаще достаточно просто закрыть
+        await postJsonWithFallback(PROXY_URL, buildPayload());
       }finally{
         try{ tg.close(); }catch(_){}
       }
@@ -256,3 +262,5 @@
   </script>
 </body>
 </html>
+
+
